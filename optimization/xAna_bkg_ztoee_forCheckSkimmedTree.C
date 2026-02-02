@@ -1,19 +1,30 @@
+#include <cstring>
 #include <vector>
 #include <iostream>
 #include <fstream>
 #include <queue>
 #include <algorithm>
+#include <regex>
 #include <TH1D.h>
 #include <TH1F.h>
+#include <TH2F.h>
 #include <TFile.h>
 #include "untuplizer.h"
 #include <TClonesArray.h>
 #include <TLorentzVector.h>
 #include <TAxis.h>
-#include <math.h>
+#include <cmath>
 #include <string>
 #include <TTreeReader.h>
+#include <TError.h>
 using namespace std;
+
+// #define stringify_directly(x) #x
+// #define stringify_expanded(x) stringify_directly(x)
+
+#ifndef INCLUSIVE_SUPPORT
+#define INCLUSIVE_SUPPORT 1
+#endif
 
 void efferr(float nsig, float ntotal, float factor = 1)
 {
@@ -65,8 +76,16 @@ float cal_dphi(float phi1, float phi2)
     return TMath::Abs(dphi);
 }
 
+void xAna_bkg_ztoee_forCheckSkimmedTree(const char *inputFilename = "../DYJetsToLL_M-50_HT-70to100_TuneCP5_PSweights_13TeV-madgraphMLM-pythia8.root", const char *outputfile = "outputEffCheck_DYJetsToLL_M-50_HT-70to100_TuneCP5_PSweights_13TeV-madgraphMLM-pythia8.root");
+void xAna_bkg_ztoee_forCheckSkimmedTree(vector<const char*> vInputFilename, const char* outputfile);
+
+void xAna_bkg_ztoee_forCheckSkimmedTree(const char *inputFilename, const char *outputfile)
+{
+    return xAna_bkg_ztoee_forCheckSkimmedTree(vector<const char*>({ inputFilename }) , outputfile);
+}
+
 //void xAna_bkg_ztoee_forCheckSkimmedTree(string inputtxtFilename, string outputfile)
-void xAna_bkg_ztoee_forCheckSkimmedTree(string inputFilename = "../DYJetsToLL_M-50_HT-70to100_TuneCP5_PSweights_13TeV-madgraphMLM-pythia8.root", string outputfile = "outputEffCheck_DYJetsToLL_M-50_HT-70to100_TuneCP5_PSweights_13TeV-madgraphMLM-pythia8.root")
+void xAna_bkg_ztoee_forCheckSkimmedTree(vector<const char*> vInputFilename, const char *outputfile)
 {
 
     //TFile *file = TFile::Open(inputFilename);
@@ -88,6 +107,48 @@ void xAna_bkg_ztoee_forCheckSkimmedTree(string inputFilename = "../DYJetsToLL_M-
     fin.close();
     cout << "line" << line << endl;*/
 
+    int exclusiveLowerBound = 0, exclusiveUpperBound = 0;
+    const char* exclusiveType = "";
+    bool isInclusive = false;
+
+#if INCLUSIVE_SUPPORT
+    const string strPatternDY = "DYJetsToLL";
+    if (regex_search(vInputFilename[0], regex(strPatternDY))) {
+        // -70to100 or -2500toInf
+        const string strPatternSuf = "-([0-9]+)to([0-9]+|Inf)[^0-9]";
+        isInclusive = true;
+        for (const char* inclusiveTypeCandidate: {"HT"})
+        {
+            printf("Trying inclusiveTypeCandidate %s\n", inclusiveTypeCandidate);
+            // _HT-70to100
+            regex rPatternExclusive(strPatternDY + "[^/]*_" + inclusiveTypeCandidate + strPatternSuf);
+            if (regex_search(vInputFilename[0], rPatternExclusive)) {
+                isInclusive = false;
+                break;
+            }
+            cmatch mBounds;
+            if(!regex_search(outputfile, mBounds, rPatternExclusive)) continue;
+            exclusiveType = inclusiveTypeCandidate;
+            exclusiveLowerBound = stoi(mBounds[1].str());
+            exclusiveUpperBound = mBounds[2].compare("Inf") == 0 ? -1 : stoi(mBounds[2].str());
+            printf("matched %s, exclusiveLowerBound: %d, exclusiveUpperBound: %d\n", mBounds[0].str().c_str(), exclusiveLowerBound, exclusiveUpperBound);
+            break;
+        }
+        if (isInclusive && exclusiveType[0] == '\0')
+            {
+                Fatal("xAna_bkg_ztoee_forCheckSkimmedTree", "vInputFilename[0] appears an inclusive %s dataset, but the exclusive range and type is absent in the outputfile.", strPatternDY.c_str());
+            }
+    }
+    if (!isInclusive)
+    {
+        printf("Not inclusive.\n");
+    }
+    else
+    {
+        printf("exclusiveType: \"%s\"\n", exclusiveType);
+    }
+#endif
+
     //------------------
     // Create histrogram
     //------------------
@@ -99,6 +160,10 @@ void xAna_bkg_ztoee_forCheckSkimmedTree(string inputFilename = "../DYJetsToLL_M-
 
     TH1D *h_totevent = new TH1D("h_totevent", "total events", 5, 0, 5);
     h_totevent->Sumw2();
+
+    TH1D *h_HT = new TH1D("h_HT", "HT", 1000, 0, 1000.);
+    h_HT->GetXaxis()->SetTitle("HT");
+    h_HT->GetYaxis()->SetTitle("Number of Events");
 
     TH1F *h_HT_eventCout = new TH1F("h_HT_eventCout", "", 10, 0, 10);
     h_HT_eventCout->SetYTitle("N event");
@@ -248,6 +313,24 @@ void xAna_bkg_ztoee_forCheckSkimmedTree(string inputFilename = "../DYJetsToLL_M-
     h_recoee_nAK4pass->GetYaxis()->SetTitle("Number of Events");
     h_recoee_nAK4pass->Sumw2();
 
+    TH1D *h_ZbosonPt = new TH1D("h_ZbosonPt", "ZbosonPt", 1000, 0, 1000);
+    h_ZbosonPt->GetXaxis()->SetTitle("Pt of Z boson after preselection");
+    h_ZbosonPt->GetYaxis()->SetTitle("Number of Events");
+    TH1D *h_ZbosonPt_HasLPairsEle = static_cast<TH1D *>(h_ZbosonPt->Clone("h_ZbosonPt_HasLPairsEle"));
+    TH1D *h_ZbosonPt_HasVtxEle = static_cast<TH1D *>(h_ZbosonPt->Clone("h_ZbosonPt_HasVtxEle"));
+    TH1D *h_ZbosonPt_NoTauEle = static_cast<TH1D *>(h_ZbosonPt->Clone("h_ZbosonPt_NoTauEle"));
+    TH1D *h_ZbosonPt_LPairsPassPtEle = static_cast<TH1D *>(h_ZbosonPt->Clone("h_ZbosonPt_LPairsPassPtEle"));
+    TH1D *h_ZbosonPt_ZMassCutEle = static_cast<TH1D *>(h_ZbosonPt->Clone("h_ZbosonPt_ZMassCutEle"));
+    TH1D *h_ZbosonPt_NoExtraLEle = static_cast<TH1D *>(h_ZbosonPt->Clone("h_ZbosonPt_NoExtraLEle"));
+    TH1D *h_ZbosonPt_HasTHINJetEle = static_cast<TH1D *>(h_ZbosonPt->Clone("h_ZbosonPt_HasTHINJetEle"));
+
+    TH1D *h_pfMetCorrPt = new TH1D("h_pfMetCorrPt", "pfMetCorrPt", 1000, 0, 1000);
+    h_pfMetCorrPt->GetXaxis()->SetTitle("Missing transverse momentum after preselection");
+    h_pfMetCorrPt->GetYaxis()->SetTitle("Number of Events");
+
+    TH2F *h2_ZbosonPt_pfMetCorrPt = new TH2F("h2_ZbosonPt_pfMetCorrPt", "ZbosonPt vs. pfMetCorrPt", 1000, 0, 1000, 1000, 0, 1000);
+    h2_ZbosonPt_pfMetCorrPt->GetXaxis()->SetTitle("Pt of Z boson after preselection");
+    h2_ZbosonPt_pfMetCorrPt->GetYaxis()->SetTitle("Missing transverse momentum after preselection");
     //----------------------
     // Void Tree variable
     //----------------------
@@ -255,8 +338,8 @@ void xAna_bkg_ztoee_forCheckSkimmedTree(string inputFilename = "../DYJetsToLL_M-
     Int_t I_weight;
     ULong64_t I_eventID;
     Float_t f_Met;
-    //Float_t f_HT;
     //Float_t f_dileptonmass;
+    Float_t f_HT;
 
     Float_t f_goodElePt;
     Float_t f_goodEleMass;
@@ -277,6 +360,8 @@ void xAna_bkg_ztoee_forCheckSkimmedTree(string inputFilename = "../DYJetsToLL_M-
     Float_t f_ZbosonMass;
     Float_t f_ZbosonEta;
     Float_t f_ZbosonPhi;
+
+    Float_t f_pfMetCorrPt;
     vector<float> v_met;
     vector<float> v_met_lepdeltaPhi;
     Int_t I_nThinJets;
@@ -323,6 +408,7 @@ void xAna_bkg_ztoee_forCheckSkimmedTree(string inputFilename = "../DYJetsToLL_M-
     T_tree->Branch("I_weight", &I_weight);
     T_tree->Branch("I_eventID", &I_eventID);
     T_tree->Branch("f_Met", &f_Met);
+    if (strcmp(exclusiveType, "HT") == 0) T_tree->Branch("f_HT", &f_HT);
     //T_tree->Branch("f_HT", &f_HT);
     //T_tree->Branch("f_dileptonmass", &f_dileptonmass);
     T_tree->Branch("f_dileptonPT", &f_dileptonPT);
@@ -331,6 +417,7 @@ void xAna_bkg_ztoee_forCheckSkimmedTree(string inputFilename = "../DYJetsToLL_M-
     T_tree->Branch("f_ZbosonMass", &f_ZbosonMass);
     T_tree->Branch("f_ZbosonEta", &f_ZbosonEta);
     T_tree->Branch("f_ZbosonPhi", &f_ZbosonPhi);
+    T_tree->Branch("f_pfMetCorrPt", &f_pfMetCorrPt);
     
     T_tree->Branch("f_goodElePt", &f_goodElePt);
     T_tree->Branch("f_goodEleMass", &f_goodEleMass);
@@ -416,10 +503,10 @@ void xAna_bkg_ztoee_forCheckSkimmedTree(string inputFilename = "../DYJetsToLL_M-
 
         //get TTree from file ...
         //TreeReader data(inputFile.data());
-        TreeReader data(inputFilename.data());
+        TreeReader data(vInputFilename.data(), vInputFilename.size(), "outTree");
         //TTreeReader data("outTree", file);
 
-        Long64_t nTotal = 0;
+        // Long64_t nTotal = 0;
         Long64_t nZboson = 0;
         int nEleBefore = 0;
         int nEleAfter = 0;
@@ -480,7 +567,7 @@ void xAna_bkg_ztoee_forCheckSkimmedTree(string inputFilename = "../DYJetsToLL_M-
             v_goodTauE.clear();
             
             data.GetEntry(jEntry);
-            nTotal ++;
+            // nTotal ++;
 
             Float_t mcWeight = data.GetFloat("mcweight");
             Double_t eventWeight = mcWeight;
@@ -496,6 +583,18 @@ void xAna_bkg_ztoee_forCheckSkimmedTree(string inputFilename = "../DYJetsToLL_M-
                 {
                     eventWeight = 1;
                 }
+
+            // Inclusive range filtering (prior to the total event count and preselections)
+            if (isInclusive && strcmp(exclusiveType, "HT") == 0)
+            {
+                f_HT = -1.;
+                f_HT = data.GetFloat("st_HT");
+                if (f_HT < exclusiveLowerBound || (exclusiveUpperBound >= 0 && f_HT >= exclusiveUpperBound))
+                {
+                    continue;
+                }
+                h_HT->Fill(f_HT, eventWeight);
+            }
 
             //---------------------------
             // Get Total event number
@@ -545,7 +644,7 @@ void xAna_bkg_ztoee_forCheckSkimmedTree(string inputFilename = "../DYJetsToLL_M-
             gen_chi2numb->Fill(chi2s.size(), eventWeight);
             gen_eenumber->Fill(myEles.size(), eventWeight);
 
-            if (matchee)
+            // if (matchee)
             {
                 h_genee_event->Fill(1.0, eventWeight);
 
@@ -598,7 +697,7 @@ void xAna_bkg_ztoee_forCheckSkimmedTree(string inputFilename = "../DYJetsToLL_M-
                 h_ele_n->Fill(goodElectrons.size(), eventWeight);
 
                 sort(goodElectrons.begin(), goodElectrons.end(), pt_greater);
-                
+
                 // 2. Muon
                 Long64_t nMu = data.GetLong64("st_nMu");
                 Float_t* muPx = data.GetPtrFloat("st_muPx");
@@ -665,12 +764,21 @@ void xAna_bkg_ztoee_forCheckSkimmedTree(string inputFilename = "../DYJetsToLL_M-
                     h_recoee_event->Fill(1, eventWeight);
                     h_ee_npass->Fill(1, eventWeight);
 
+                    const TLorentzVector Zboson = goodElectrons[0] + goodElectrons[1];
+                    const float Zboson_pt = Zboson.Pt();
+                    const float Zboson_mass = Zboson.M();
+                    const float Zboson_eta = Zboson.Eta();
+                    const float Zboson_phi = Zboson.Phi();
+
+                    h_ZbosonPt_HasLPairsEle->Fill(Zboson_pt, eventWeight);
+
                     // 3. Good Vertex
                     Long64_t nVtx = data.GetLong64("st_nVtx");
                     if (nVtx < 1)
                         continue;
                     h_recoee_Vtxpass->Fill(1, eventWeight);
                     h_ee_npass->Fill(2, eventWeight);
+                    h_ZbosonPt_HasVtxEle->Fill(Zboson_pt, eventWeight);
 
                     // 4. Tau Veto
                     //Long64_t nTau_DRBased_EleVeto = data.GetLong64("st_nTau_DRBased_EleMuVeto");
@@ -679,14 +787,16 @@ void xAna_bkg_ztoee_forCheckSkimmedTree(string inputFilename = "../DYJetsToLL_M-
                         continue;
                     h_recoee_vetoTau->Fill(1, eventWeight);
                     h_ee_npass->Fill(3, eventWeight);
+                    h_ZbosonPt_NoTauEle->Fill(Zboson_pt, eventWeight);
 
-                    // 6. Z boson
-                    if (goodElectrons[0].Pt() < 25 && goodElectrons[1].Pt() < 20)
+                    // 5. Z boson
+                    if (goodElectrons[0].Pt() <= 25 && goodElectrons[1].Pt() <= 20)
                     {
                         continue;
                     }
                     h_ee_npass->Fill(4, eventWeight);
                     h_recoee_eePtpass->Fill(1, eventWeight);
+                    h_ZbosonPt_LPairsPassPtEle->Fill(Zboson_pt, eventWeight);
 
                     float PDGZmass = 91.1876;
                     TLorentzVector dilep = goodElectrons[0] + goodElectrons[1];
@@ -698,6 +808,7 @@ void xAna_bkg_ztoee_forCheckSkimmedTree(string inputFilename = "../DYJetsToLL_M-
                     }
                     h_ee_npass->Fill(5, eventWeight);
                     h_recoee_deltaMasspass->Fill(1, eventWeight);
+                    h_ZbosonPt_ZMassCutEle->Fill(Zboson_pt, eventWeight);
             
                     //----------------------
                     // To reduce diboson case (veto extra leptons)
@@ -708,15 +819,11 @@ void xAna_bkg_ztoee_forCheckSkimmedTree(string inputFilename = "../DYJetsToLL_M-
                     }
                     h_Zboson_n->Fill(1, eventWeight);
                     h_ee_npass->Fill(6, eventWeight);
+                    h_ZbosonPt_NoExtraLEle->Fill(Zboson_pt, eventWeight);
                     nZboson ++;
 
-                    TLorentzVector Zboson = goodElectrons[0] + goodElectrons[1];
                     //if (Zboson.Pt() < 50)
                     //    continue;
-                    float Zboson_pt = Zboson.Pt();
-                    float Zboson_mass = Zboson.M();
-                    float Zboson_eta = Zboson.Eta();
-                    float Zboson_phi = Zboson.Phi();
                     //h_recoee_ZbosonPtpass->Fill(1, eventWeight);
                     //h_ee_npass->Fill(8, eventWeight);
 
@@ -747,6 +854,7 @@ void xAna_bkg_ztoee_forCheckSkimmedTree(string inputFilename = "../DYJetsToLL_M-
                     
                     h_recoee_nAK4pass->Fill(1, eventWeight); //add this -> write in tree
                     h_ee_npass->Fill(7, eventWeight);
+                    h_ZbosonPt_HasTHINJetEle->Fill(Zboson_pt, eventWeight);
                     nEventAfterAllPreselection ++;
 
                     //---------------------------
@@ -783,8 +891,8 @@ void xAna_bkg_ztoee_forCheckSkimmedTree(string inputFilename = "../DYJetsToLL_M-
                         temp_emergTrackPhi.clear();
                         temp_emergTrackdR.clear();
 
-                        if (THINjetAlpha3D[iak4j] < 0.1)
-                        {
+                        //if (THINjetAlpha3D[iak4j] < 0.1)
+                        //{
                             emergTrackMultiplicity = THINjetNTracks[iak4j];
                             for (int it = 0; it < THINjetNTracks[iak4j]; it++)
                             {
@@ -817,9 +925,9 @@ void xAna_bkg_ztoee_forCheckSkimmedTree(string inputFilename = "../DYJetsToLL_M-
                            v_emergingTrackEta.insert(v_emergingTrackEta.end(), temp_emergTrackEta.begin(), temp_emergTrackEta.end());
                            v_emergingTrackPhi.insert(v_emergingTrackPhi.end(), temp_emergTrackPhi.begin(), temp_emergTrackPhi.end());
                            v_emergingTrackAK4jetdR.insert(v_emergingTrackAK4jetdR.end(), temp_emergTrackdR.begin(), temp_emergTrackdR.end());
-                        }
-                        else
-                            continue;
+                        //}
+                        //else
+                        //    continue;
                     } //end of ak4jet loop for emerg track (emerg jet)
                     
 
@@ -840,7 +948,12 @@ void xAna_bkg_ztoee_forCheckSkimmedTree(string inputFilename = "../DYJetsToLL_M-
                     //f_HT = HT;
                     //f_Met = met;
                     //I_nThinJets = indexForPassAK4.size();
+                    Float_t pfMetCorrPt = data.GetFloat("st_pfMetCorrPt");
+                    f_pfMetCorrPt = pfMetCorrPt;
                     T_tree->Fill();
+                    h_ZbosonPt->Fill(Zboson_pt, eventWeight);
+                    h_pfMetCorrPt->Fill(pfMetCorrPt, eventWeight);
+                    h2_ZbosonPt_pfMetCorrPt->Fill(pfMetCorrPt, Zboson_pt, eventWeight);
                 } // End of recoeeEvent Loop
             }     // End of matchee (gen ee)
         }         // End of Event Entries loop
@@ -925,11 +1038,13 @@ void xAna_bkg_ztoee_forCheckSkimmedTree(string inputFilename = "../DYJetsToLL_M-
     //}//end of flist loop
 
     // out Tree branches
-    TFile *outFile = new TFile(outputfile.c_str(), "RECREATE");
+    TFile *outFile = new TFile(outputfile, "RECREATE");
     outFile->cd();
-    T_tree->Write();
+    // Opt-out tree outputs to save space
+    // T_tree->Write();
     outFile->mkdir("Event_Variable", "Event_Variable")->cd();
     h_totevent->Write();
+    h_HT->Write();
     h_genee_event->Write();
     h_recoee_event->Write();
     h_ele_n->Write();
@@ -967,7 +1082,27 @@ void xAna_bkg_ztoee_forCheckSkimmedTree(string inputFilename = "../DYJetsToLL_M-
     //h_goodTauMass->Write();
     //h_goodTauEta->Write();
     //h_goodTauPhi->Write();
+    h_ZbosonPt->Write();
+    h_pfMetCorrPt->Write();
+    h2_ZbosonPt_pfMetCorrPt->Write();
+    h_ZbosonPt_HasLPairsEle->Write();
+    h_ZbosonPt_HasVtxEle->Write();
+    h_ZbosonPt_NoTauEle->Write();
+    h_ZbosonPt_LPairsPassPtEle->Write();
+    h_ZbosonPt_ZMassCutEle->Write();
+    h_ZbosonPt_NoExtraLEle->Write();
+    h_ZbosonPt_HasTHINJetEle->Write();
     outFile->cd("/");
     outFile->Close();
 } // big end
 //Store the result in outputfile (root)
+
+int main(int argc, char **argv) {
+    if (argc <= 2) {
+        Error("xAna_bkg_ztoee_forCheckSkimmedTree.C:main", "Expect arguments OUTFILE INFILE1 [INFILE2 ...]");
+        return 1;
+    }
+    const vector<const char*> vOutputFiles(argv + 2, argv + argc);
+    xAna_bkg_ztoee_forCheckSkimmedTree(vOutputFiles , argv[1]);
+    return 0;
+}

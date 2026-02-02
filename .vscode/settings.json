@@ -1,0 +1,7 @@
+{
+    "files.associations": {
+        "*.C": "cpp",
+        "*.h": "cpp"
+    },
+    "C_Cpp.autoAddFileAssociations": false
+}
